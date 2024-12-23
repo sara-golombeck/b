@@ -1,0 +1,40 @@
+pipeline {
+    agent any
+    
+    stages {
+        stage('Clone Repository') {
+            steps {
+                sshagent(['github']) {
+                    sh 'git clone git@github.com:le7-devops/backend.git'
+                }
+            }
+        }
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    sh 'docker build -f ./Dockerfile -t zelda_backend .'
+                }
+            }
+        }  
+        stage('Push Docker Image to GitHub') {
+            steps {
+                script {
+                    sh 'docker tag zelda_backend ghcr.io/your-username/zelda_backend:latest'
+                    sh 'docker push ghcr.io/your-username/zelda_backend:latest'
+                }
+            }
+        }
+        stage('Push Version to Git') {
+            steps {
+                sshagent(['github']) {
+                    script {
+                        sh 'git config user.email "you@example.com"'
+                        sh 'git config user.name "Your Name"'
+                        sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
+                        sh 'git push --tags'
+                    }
+                }
+            }
+        }
+    }
+}
