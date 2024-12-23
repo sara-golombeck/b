@@ -16,7 +16,7 @@ pipeline {
                 }
             }
         }  
-        stage('Push Docker Image to GitHub') {
+        stage('Login to GHCR and Push Docker Image') {
             steps {
                 script {
                     withCredentials([string(credentialsId: 'ghcr-token', variable: 'GITHUB_TOKEN')]) {
