@@ -19,11 +19,16 @@ pipeline {
         stage('Push Docker Image to GitHub') {
             steps {
                 script {
-                    sh 'docker tag zelda_backend ghcr.io/your-username/zelda_backend:latest'
-                    sh 'docker push ghcr.io/your-username/zelda_backend:latest'
+                    withCredentials([string(credentialsId: 'ghcr-token', variable: 'GITHUB_TOKEN')]) {
+                        sh 'echo $GITHUB_TOKEN | docker login ghcr.io -u le7-devops --password-stdin'
+                        sh 'docker tag zelda_backend ghcr.io/le7-devops/backend:latest'
+                        sh 'docker push ghcr.io/le7-devops/backend:latest'
+                    }
                 }
             }
         }
+
+      
         stage('Push Version to Git') {
             steps {
                 sshagent(['github']) {
