@@ -4,7 +4,9 @@ pipeline {
     stages {
         stage('Clone Repository') {
             steps {
+
                 sshagent(['github']) {
+                    sh 'rm -rf backend'
                     sh 'git clone git@github.com:le7-devops/backend.git'
                 }
             }
