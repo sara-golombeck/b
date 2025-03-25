@@ -51,6 +51,10 @@
 pipeline {
     agent any
     
+    tools {
+        nodejs 'node_23'  // הערך חייב להתאים לשם שהגדרת בהגדרות Jenkins
+    }
+    
     stages {
         stage('Clone Repository') {
             steps {
