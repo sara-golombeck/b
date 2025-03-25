@@ -52,7 +52,7 @@ pipeline {
     agent any
     
     tools {
-        nodejs 'node_23'  // ודא שהשם תואם להגדרות ב-Jenkins
+        nodejs 'Node 16'
     }
     
     stages {
@@ -68,7 +68,7 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 dir('backend') {
-                    sh 'npm install'
+                    sh 'npm ci --no-audit --prefer-offline'
                 }
             }
         }
@@ -76,6 +76,7 @@ pipeline {
         stage('Run Unit Tests') {
             steps {
                 dir('backend') {
+                    // הגדלת ה-timeout ל-10 שניות במקום 2 שניות ברירת המחדל
                     sh 'NODE_ENV=test npx mocha --exit --timeout 10000'
                 }
             }
