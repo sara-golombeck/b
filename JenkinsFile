@@ -2,12 +2,15 @@ pipeline {
     agent any
     
     environment {
-        NODE_VERSION = 'node_23'
         POSTGRES_USER = 'postgres'
         POSTGRES_PASSWORD = 'postgres'
         POSTGRES_DB = 'zelda_cookbook'
-        DB_HOST = 'postgres-test'
         DB_PORT = '5432'
+        NODE_VERSION = 'node_23'  // שם הכלי שהתקנת בג'נקינס
+    }
+    
+    tools {
+        nodejs NODE_VERSION  // מגדיר שימוש בכלי Node.js שהוגדר בג'נקינס
     }
     
     stages {
@@ -19,8 +22,6 @@ pipeline {
                     echo "Cleaning up previous resources..."
                     docker ps -a | grep -E "postgres|pg" | awk '{print $1}' | xargs -r docker rm -f || true
                     docker network rm app-network || true
-                    # במידה ויש קבצי נעילה או תהליכים שעדיין מחזיקים את הפורט
-                    # תוכל להוסיף פקודות נוספות לטיפול בהם
                     '''
                 }
             }
@@ -31,7 +32,6 @@ pipeline {
                 sshagent(['github']) {
                     sh 'rm -rf backend'
                     sh 'git clone git@github.com:le7-devops/backend.git'
-                    sh 'cd backend'
                 }
             }
         }
@@ -62,26 +62,34 @@ pipeline {
         stage('Unit Tests') {
             steps {
                 script {
-                    // Run unit tests in a Node.js container
-                    sh '''
-                    docker run --rm \
-                      --network app-network \
-                      -v $(pwd)/backend:/app \
-                      -w /app \
-                      -e NODE_ENV=test \
-                      -e DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-test:${DB_PORT}/${POSTGRES_DB} \
-                      node:${NODE_VERSION} \
-                      sh -c "npm install && npx knex migrate:latest --env test && npx knex seed:run --env test && npm test"
-                    '''
+                    dir('backend') {
+                        // הרץ את בדיקות היחידה ישירות עם Node.js המותקן בג'נקינס
+                        sh '''
+                        echo "Running tests with Node.js version:"
+                        node --version
+                        npm --version
+                        
+                        # התקן את התלויות
+                        npm install
+                        
+                        # הגדר משתנה סביבה עבור מסד הנתונים
+                        export NODE_ENV=test
+                        export DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${DB_PORT}/${POSTGRES_DB}
+                        
+                        # הרץ מיגרציות וטען נתונים לבדיקות
+                        npx knex migrate:latest --env test
+                        npx knex seed:run --env test
+                        
+                        # הרץ את בדיקות היחידה
+                        npm test
+                        '''
+                    }
                 }
             }
             post {
                 always {
-                    // Cleanup test database
-                    sh 'docker rm -f postgres-test || true'
-                    
-                    // Save test results
-                    junit 'backend/test-results.xml || true'
+                    // נסה לאחסן את תוצאות הבדיקה אם הם קיימים
+                    junit allowEmptyResults: true, testResults: 'backend/test-results.xml'
                 }
             }
         }
@@ -89,7 +97,9 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    sh 'cd backend && docker build -f ./Dockerfile -t zelda_backend .'
+                    dir('backend') {
+                        sh 'docker build -f ./Dockerfile -t zelda_backend .'
+                    }
                 }
             }
         }
@@ -110,10 +120,12 @@ pipeline {
             steps {
                 sshagent(['github']) {
                     script {
-                        sh 'cd backend && git config user.email "sara.beck.dev@example.com"'
-                        sh 'cd backend && git config user.name "Sara"'
-                        sh 'cd backend && git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
-                        sh 'cd backend && git push --tags'
+                        dir('backend') {
+                            sh 'git config user.email "sara.beck.dev@example.com"'
+                            sh 'git config user.name "Sara"'
+                            sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
+                            sh 'git push --tags'
+                        }
                     }
                 }
             }
