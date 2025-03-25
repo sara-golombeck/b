@@ -26,14 +26,30 @@ pipeline {
         stage('Check PostgreSQL Service') {
             steps {
                 script {
-                    // בדוק אם PostgreSQL פעיל ופועל
+                    // בדוק אם PostgreSQL פעיל באמצעות פקודות בסיסיות
                     sh '''
-                        echo "בודק אם שירות PostgreSQL כבר פעיל..."
-                        if netstat -tuln | grep ${POSTGRES_PORT}; then
-                            echo "PostgreSQL פעיל ב-port ${POSTGRES_PORT}"
+                        echo "בודק שירות PostgreSQL..."
+                        # נסה להתחבר ישירות במקום לבדוק אם הפורט פתוח
+                        if PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "SELECT 1" > /dev/null 2>&1; then
+                            echo "PostgreSQL פעיל וניתן להתחבר אליו"
                         else
-                            echo "אזהרה: לא נמצא שירות PostgreSQL פעיל ב-port ${POSTGRES_PORT}!"
-                            exit 1
+                            echo "אזהרה: לא ניתן להתחבר ל-PostgreSQL. בודק אם צריך להקים מיכל..."
+                            
+                            # נסה להפעיל מיכל docker חדש
+                            echo "מנסה להפעיל מיכל PostgreSQL..."
+                            if docker run -d --name postgres-test \
+                                -e POSTGRES_USER=${POSTGRES_USER} \
+                                -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+                                -e POSTGRES_DB=${POSTGRES_DB} \
+                                -p ${POSTGRES_PORT}:5432 \
+                                postgres:12; then
+                                
+                                echo "נוצר מיכל PostgreSQL חדש. ממתין לאתחול..."
+                                sleep 15
+                            else
+                                echo "הפורט ${POSTGRES_PORT} כנראה תפוס אבל לא ניתן להתחבר. בדוק את התצורה."
+                                exit 1
+                            fi
                         fi
                     '''
                 }
@@ -49,7 +65,7 @@ pipeline {
                         PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "SELECT 1 as connection_test;"
                         
                         # בדוק אם בסיס הנתונים קיים
-                        if ! PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -lqt | cut -d \\| -f 1 | grep -qw ${POSTGRES_DB}; then
+                        if ! PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -lqt | grep -q ${POSTGRES_DB}; then
                             echo "יוצר בסיס נתונים ${POSTGRES_DB}..."
                             PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "CREATE DATABASE ${POSTGRES_DB};"
                         else
@@ -65,22 +81,13 @@ pipeline {
                 dir('backend') {
                     sh 'npm install'
                     
-                    // עדכן את מחרוזת החיבור להשתמש בשרת PostgreSQL המקומי
+                    // עדכן את מחרוזת החיבור להשתמש בשרת PostgreSQL
                     sh '''
                         sed -i "s|postgres:postgres@db:5432|${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}|g" knexfile.js
                     '''
                     
                     // הצג את מחרוזת החיבור המעודכנת
                     sh 'grep -n "connection:" knexfile.js || echo "לא נמצאה מחרוזת חיבור"'
-                    
-                    // עדכן את הגדרת timeout לטסטים
-                    sh '''
-                        if grep -q "test.*mocha --exit" package.json; then
-                            sed -i 's/"test": "NODE_ENV=test mocha --exit"/"test": "NODE_ENV=test mocha --exit --timeout 30000"/g' package.json
-                        else
-                            echo "לא נמצאה הגדרת test מתאימה ב-package.json"
-                        fi
-                    '''
                 }
             }
         }
@@ -93,7 +100,6 @@ pipeline {
                         sh '''
                             echo "גרסת Node: $(node -v)"
                             echo "תיקייה נוכחית: $(pwd)"
-                            echo "הגדרת סביבה: NODE_ENV=${NODE_ENV}"
                         '''
                         
                         // הרץ את הבדיקות עם timeout מוגדל
@@ -107,12 +113,6 @@ pipeline {
                 }
                 failure {
                     echo 'הבדיקות נכשלו! בדוק את הלוגים לפרטים נוספים.'
-                    
-                    // הצג מידע דיאגנוסטי נוסף בכישלון
-                    sh '''
-                        echo "בדיקת חיבור לבסיס הנתונים:"
-                        PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "\\l" || echo "לא ניתן להתחבר לבסיס הנתונים"
-                    '''
                 }
             }
         }
