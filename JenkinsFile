@@ -1,16 +1,13 @@
 pipeline {
     agent any
     
-    tools {
-        nodejs 'node_23'
-    }
-    
     environment {
+        NODE_VERSION = 'node_23'
         POSTGRES_USER = 'postgres'
         POSTGRES_PASSWORD = 'postgres'
         POSTGRES_DB = 'zelda_cookbook'
-        POSTGRES_HOST = 'localhost'
-        POSTGRES_PORT = '5432'
+        DB_HOST = 'postgres'
+        DB_PORT = '5432'
     }
     
     stages {
@@ -19,100 +16,57 @@ pipeline {
                 sshagent(['github']) {
                     sh 'rm -rf backend'
                     sh 'git clone git@github.com:le7-devops/backend.git'
+                    sh 'cd backend'
                 }
             }
         }
         
-        stage('Check PostgreSQL Service') {
+        stage('Setup Test Environment') {
             steps {
                 script {
-                    // בדוק אם PostgreSQL פעיל באמצעות פקודות בסיסיות
+                    sh 'docker network create app-network || true'
+                    
+                    // Start PostgreSQL container for testing
                     sh '''
-                        echo "בודק שירות PostgreSQL..."
-                        # נסה להתחבר ישירות במקום לבדוק אם הפורט פתוח
-                        if PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "SELECT 1" > /dev/null 2>&1; then
-                            echo "PostgreSQL פעיל וניתן להתחבר אליו"
-                        else
-                            echo "אזהרה: לא ניתן להתחבר ל-PostgreSQL. בודק אם צריך להקים מיכל..."
-                            
-                            # נסה להפעיל מיכל docker חדש
-                            echo "מנסה להפעיל מיכל PostgreSQL..."
-                            if docker run -d --name postgres-test \
-                                -e POSTGRES_USER=${POSTGRES_USER} \
-                                -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
-                                -e POSTGRES_DB=${POSTGRES_DB} \
-                                -p ${POSTGRES_PORT}:5432 \
-                                postgres:12; then
-                                
-                                echo "נוצר מיכל PostgreSQL חדש. ממתין לאתחול..."
-                                sleep 15
-                            else
-                                echo "הפורט ${POSTGRES_PORT} כנראה תפוס אבל לא ניתן להתחבר. בדוק את התצורה."
-                                exit 1
-                            fi
-                        fi
+                    docker rm -f postgres-test || true
+                    docker run -d --name postgres-test \
+                      --network app-network \
+                      -e POSTGRES_USER=${POSTGRES_USER} \
+                      -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+                      -e POSTGRES_DB=${POSTGRES_DB} \
+                      -p ${DB_PORT}:5432 \
+                      postgres:14-alpine
                     '''
+                    
+                    // Wait for PostgreSQL to be ready
+                    sh 'sleep 10'
                 }
             }
         }
         
-        stage('Verify Database Connection') {
+        stage('Unit Tests') {
             steps {
                 script {
-                    // בדוק את החיבור לבסיס הנתונים
+                    // Run unit tests in a Node.js container
                     sh '''
-                        echo "בודק חיבור PostgreSQL..."
-                        PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "SELECT 1 as connection_test;"
-                        
-                        # בדוק אם בסיס הנתונים קיים
-                        if ! PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -lqt | grep -q ${POSTGRES_DB}; then
-                            echo "יוצר בסיס נתונים ${POSTGRES_DB}..."
-                            PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "CREATE DATABASE ${POSTGRES_DB};"
-                        else
-                            echo "בסיס הנתונים ${POSTGRES_DB} כבר קיים"
-                        fi
+                    docker run --rm \
+                      --network app-network \
+                      -v $(pwd)/backend:/app \
+                      -w /app \
+                      -e NODE_ENV=test \
+                      -e DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-test:${DB_PORT}/${POSTGRES_DB} \
+                      node:${NODE_VERSION} \
+                      sh -c "npm install && npx knex migrate:latest --env test && npx knex seed:run --env test && npm test"
                     '''
-                }
-            }
-        }
-        
-        stage('Setup Environment') {
-            steps {
-                dir('backend') {
-                    sh 'npm install'
-                    
-                    // עדכן את מחרוזת החיבור להשתמש בשרת PostgreSQL
-                    sh '''
-                        sed -i "s|postgres:postgres@db:5432|${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}|g" knexfile.js
-                    '''
-                    
-                    // הצג את מחרוזת החיבור המעודכנת
-                    sh 'grep -n "connection:" knexfile.js || echo "לא נמצאה מחרוזת חיבור"'
-                }
-            }
-        }
-        
-        stage('Run Unit Tests') {
-            steps {
-                dir('backend') {
-                    withEnv(['NODE_ENV=test', 'KEY=zelda-test-secret-key']) {
-                        // הדפס מידע סביבתי
-                        sh '''
-                            echo "גרסת Node: $(node -v)"
-                            echo "תיקייה נוכחית: $(pwd)"
-                        '''
-                        
-                        // הרץ את הבדיקות עם timeout מוגדל
-                        sh 'NODE_ENV=test mocha --exit --timeout 30000'
-                    }
                 }
             }
             post {
-                success {
-                    echo 'כל הבדיקות עברו בהצלחה!'
-                }
-                failure {
-                    echo 'הבדיקות נכשלו! בדוק את הלוגים לפרטים נוספים.'
+                always {
+                    // Cleanup test database
+                    sh 'docker rm -f postgres-test || true'
+                    
+                    // Save test results
+                    junit 'backend/test-results.xml || true'
                 }
             }
         }
@@ -120,7 +74,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    sh 'docker build -f ./Dockerfile -t zelda_backend .'
+                    sh 'cd backend && docker build -f ./Dockerfile -t zelda_backend .'
                 }
             }
         }
@@ -141,10 +95,10 @@ pipeline {
             steps {
                 sshagent(['github']) {
                     script {
-                        sh 'git config user.email "sara.beck.dev@example.com"'
-                        sh 'git config user.name "Sara"'
-                        sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
-                        sh 'git push --tags'
+                        sh 'cd backend && git config user.email "sara.beck.dev@example.com"'
+                        sh 'cd backend && git config user.name "Sara"'
+                        sh 'cd backend && git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
+                        sh 'cd backend && git push --tags'
                     }
                 }
             }
@@ -153,7 +107,15 @@ pipeline {
     
     post {
         always {
-            echo 'הפייפליין הושלם'
+            // Clean up resources
+            sh 'docker network rm app-network || true'
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed!'
         }
     }
 }
