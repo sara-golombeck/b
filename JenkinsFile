@@ -52,7 +52,7 @@ pipeline {
     agent any
     
     tools {
-        nodejs 'node_23'  // הערך חייב להתאים לשם שהגדרת בהגדרות Jenkins
+        nodejs 'node_23'  // ודא שהשם תואם להגדרות ב-Jenkins
     }
     
     stages {
@@ -76,7 +76,7 @@ pipeline {
         stage('Run Unit Tests') {
             steps {
                 dir('backend') {
-                    sh 'npm test'
+                    sh 'NODE_ENV=test npx mocha --exit --timeout 10000'
                 }
             }
             post {
@@ -88,8 +88,8 @@ pipeline {
         
         stage('Build Docker Image') {
             steps {
-                script {
-                    dir('backend') {
+                dir('backend') {
+                    script {
                         sh 'docker build -t zelda_backend .'
                     }
                 }
