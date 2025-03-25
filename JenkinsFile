@@ -1,58 +1,14 @@
-// pipeline {
-//     agent any
-    
-//     stages {
-//         stage('Clone Repository') {
-//             steps {
-
-//                 sshagent(['github']) {
-//                     sh 'rm -rf backend'
-//                     sh 'git clone git@github.com:le7-devops/backend.git'
-//                 }
-//             }
-//         }
-//         stage('Build Docker Image') {
-//             steps {
-//                 script {
-//                     sh 'docker build -f ./Dockerfile -t zelda_backend .'
-//                 }
-//             }
-//         }  
-//         stage('Login to GHCR and Push Docker Image') {
-//             steps {
-//                 script {
-//                     withCredentials([string(credentialsId: 'ghcr-token', variable: 'GITHUB_TOKEN')]) {
-//                         sh 'echo $GITHUB_TOKEN | docker login ghcr.io -u le7-devops --password-stdin'
-//                         sh 'docker tag zelda_backend ghcr.io/le7-devops/backend:latest'
-//                         sh 'docker push ghcr.io/le7-devops/backend:latest'
-//                     }
-//                 }
-//             }
-//         }
-
-      
-//         stage('Push Version to Git') {
-//             steps {
-//                 sshagent(['github']) {
-//                     script {
-//                         sh 'git config user.email "sara.beck.dev@example.com"'
-//                         sh 'git config user.name "Sara"'
-//                         sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
-//                         sh 'git push --tags'
-//                     }
-//                 }
-//             }
-//         }
-//     }
-// }
-
-
-
 pipeline {
     agent any
     
     tools {
-        nodejs 'Node 16'
+        nodejs 'node_23'
+    }
+    
+    environment {
+        POSTGRES_USER = 'postgres'
+        POSTGRES_PASSWORD = 'postgres'
+        POSTGRES_DB = 'zelda_cookbook'
     }
     
     stages {
@@ -65,10 +21,36 @@ pipeline {
             }
         }
         
-        stage('Install Dependencies') {
+        stage('Setup Test Database') {
+            steps {
+                script {
+                    // Stop and remove any existing postgres container
+                    sh 'docker rm -f postgres-test || true'
+                    
+                    // Start a PostgreSQL container for testing
+                    sh '''
+                        docker run -d --name postgres-test \
+                        -e POSTGRES_USER=${POSTGRES_USER} \
+                        -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+                        -e POSTGRES_DB=${POSTGRES_DB} \
+                        -p 5432:5432 \
+                        postgres:12
+                    '''
+                    
+                    // Give the database a few seconds to start up
+                    sh 'sleep 10'
+                }
+            }
+        }
+        
+        stage('Setup Environment') {
             steps {
                 dir('backend') {
-                    sh 'npm ci --no-audit --prefer-offline'
+                    sh 'npm install'
+                    // Update the knexfile.js for testing to point to the local postgres container
+                    sh '''
+                        sed -i 's/postgres:postgres@db:5432/postgres:postgres@localhost:5432/g' knexfile.js
+                    '''
                 }
             }
         }
@@ -76,23 +58,25 @@ pipeline {
         stage('Run Unit Tests') {
             steps {
                 dir('backend') {
-                    // הגדלת ה-timeout ל-10 שניות במקום 2 שניות ברירת המחדל
-                    sh 'NODE_ENV=test npx mocha --exit --timeout 10000'
+                    withEnv(['NODE_ENV=test', 'KEY=test-secret-key']) {
+                        sh 'npm test'
+                    }
                 }
             }
             post {
-                always {
-                    junit allowEmptyResults: true, testResults: 'backend/test-results/*.xml'
+                success {
+                    echo 'All tests passed!'
+                }
+                failure {
+                    echo 'Tests failed!'
                 }
             }
         }
         
         stage('Build Docker Image') {
             steps {
-                dir('backend') {
-                    script {
-                        sh 'docker build -t zelda_backend .'
-                    }
+                script {
+                    sh 'docker build -f ./Dockerfile -t zelda_backend .'
                 }
             }
         }
@@ -111,14 +95,12 @@ pipeline {
         
         stage('Push Version to Git') {
             steps {
-                dir('backend') {
-                    sshagent(['github']) {
-                        script {
-                            sh 'git config user.email "sara.beck.dev@example.com"'
-                            sh 'git config user.name "Sara"'
-                            sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
-                            sh 'git push --tags'
-                        }
+                sshagent(['github']) {
+                    script {
+                        sh 'git config user.email "sara.beck.dev@example.com"'
+                        sh 'git config user.name "Sara"'
+                        sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
+                        sh 'git push --tags'
                     }
                 }
             }
@@ -127,13 +109,9 @@ pipeline {
     
     post {
         always {
+            // Clean up the PostgreSQL container
+            sh 'docker rm -f postgres-test || true'
             cleanWs()
-        }
-        failure {
-            echo 'הביצוע נכשל. שליחת הודעה לצוות...'
-        }
-        success {
-            echo 'הביצוע הושלם בהצלחה!'
         }
     }
 }
