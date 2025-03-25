@@ -9,6 +9,8 @@ pipeline {
         POSTGRES_USER = 'postgres'
         POSTGRES_PASSWORD = 'postgres'
         POSTGRES_DB = 'zelda_cookbook'
+        POSTGRES_HOST = 'localhost'
+        POSTGRES_PORT = '5432'
     }
     
     stages {
@@ -21,23 +23,18 @@ pipeline {
             }
         }
         
-        stage('Setup Database') {
+        stage('Check PostgreSQL Service') {
             steps {
                 script {
-                    // Stop any existing container
-                    sh 'docker rm -f postgres-test || true'
-                    
-                    // Start a new PostgreSQL container
+                    // בדוק אם PostgreSQL פעיל ופועל
                     sh '''
-                        docker run -d --name postgres-test \
-                            -e POSTGRES_USER=postgres \
-                            -e POSTGRES_PASSWORD=postgres \
-                            -e POSTGRES_DB=zelda_cookbook \
-                            -p 5432:5432 \
-                            postgres:12
-                            
-                        # Wait for PostgreSQL to start
-                        sleep 15
+                        echo "בודק אם שירות PostgreSQL כבר פעיל..."
+                        if netstat -tuln | grep ${POSTGRES_PORT}; then
+                            echo "PostgreSQL פעיל ב-port ${POSTGRES_PORT}"
+                        else
+                            echo "אזהרה: לא נמצא שירות PostgreSQL פעיל ב-port ${POSTGRES_PORT}!"
+                            exit 1
+                        fi
                     '''
                 }
             }
@@ -46,19 +43,18 @@ pipeline {
         stage('Verify Database Connection') {
             steps {
                 script {
-                    // Install PostgreSQL client if needed
-                    sh 'which psql || apt-get update && apt-get install -y postgresql-client'
-                    
-                    // Check if PostgreSQL container is running
-                    sh 'docker ps | grep postgres-test'
-                    
-                    // Check if PostgreSQL is accepting connections
+                    // בדוק את החיבור לבסיס הנתונים
                     sh '''
-                        echo "Checking PostgreSQL connection..."
-                        PGPASSWORD=postgres psql -h localhost -U postgres -c "SELECT 1 as connection_test;"
+                        echo "בודק חיבור PostgreSQL..."
+                        PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "SELECT 1 as connection_test;"
                         
-                        echo "Checking zelda_cookbook database..."
-                        PGPASSWORD=postgres psql -h localhost -U postgres -c "\\l" | grep zelda_cookbook
+                        # בדוק אם בסיס הנתונים קיים
+                        if ! PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -lqt | cut -d \\| -f 1 | grep -qw ${POSTGRES_DB}; then
+                            echo "יוצר בסיס נתונים ${POSTGRES_DB}..."
+                            PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "CREATE DATABASE ${POSTGRES_DB};"
+                        else
+                            echo "בסיס הנתונים ${POSTGRES_DB} כבר קיים"
+                        fi
                     '''
                 }
             }
@@ -69,24 +65,22 @@ pipeline {
                 dir('backend') {
                     sh 'npm install'
                     
-                    // Show current connection string
-                    sh 'grep -n "connection:" knexfile.js'
-                    
-                    // Update connection string to use localhost
+                    // עדכן את מחרוזת החיבור להשתמש בשרת PostgreSQL המקומי
                     sh '''
-                        sed -i 's/postgres:postgres@db:5432/postgres:postgres@localhost:5432/g' knexfile.js
+                        sed -i "s|postgres:postgres@db:5432|${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}|g" knexfile.js
                     '''
                     
-                    // Show updated connection string
-                    sh 'grep -n "connection:" knexfile.js'
+                    // הצג את מחרוזת החיבור המעודכנת
+                    sh 'grep -n "connection:" knexfile.js || echo "לא נמצאה מחרוזת חיבור"'
                     
-                    // Modify package.json to use longer timeout
+                    // עדכן את הגדרת timeout לטסטים
                     sh '''
-                        sed -i 's/"test": "NODE_ENV=test mocha --exit"/"test": "NODE_ENV=test mocha --exit --timeout 30000"/g' package.json
+                        if grep -q "test.*mocha --exit" package.json; then
+                            sed -i 's/"test": "NODE_ENV=test mocha --exit"/"test": "NODE_ENV=test mocha --exit --timeout 30000"/g' package.json
+                        else
+                            echo "לא נמצאה הגדרת test מתאימה ב-package.json"
+                        fi
                     '''
-                    
-                    // Show updated test script
-                    sh 'grep -n "test" package.json'
                 }
             }
         }
@@ -95,34 +89,29 @@ pipeline {
             steps {
                 dir('backend') {
                     withEnv(['NODE_ENV=test', 'KEY=zelda-test-secret-key']) {
-                        // Print environment information
+                        // הדפס מידע סביבתי
                         sh '''
-                            echo "Node version: $(node -v)"
-                            echo "NPM version: $(npm -v)"
-                            echo "Current directory: $(pwd)"
-                            echo "NODE_ENV: $NODE_ENV"
-                            echo "KEY: $KEY"
+                            echo "גרסת Node: $(node -v)"
+                            echo "תיקייה נוכחית: $(pwd)"
+                            echo "הגדרת סביבה: NODE_ENV=${NODE_ENV}"
                         '''
                         
-                        // Run tests with explicit timeout parameter
+                        // הרץ את הבדיקות עם timeout מוגדל
                         sh 'NODE_ENV=test mocha --exit --timeout 30000'
                     }
                 }
             }
             post {
                 success {
-                    echo 'All tests passed!'
+                    echo 'כל הבדיקות עברו בהצלחה!'
                 }
                 failure {
-                    echo 'Tests failed! Check the logs for details.'
+                    echo 'הבדיקות נכשלו! בדוק את הלוגים לפרטים נוספים.'
                     
-                    // Diagnostic information on failure
+                    // הצג מידע דיאגנוסטי נוסף בכישלון
                     sh '''
-                        echo "Docker container status:"
-                        docker ps -a | grep postgres
-                        
-                        echo "Connection test:"
-                        PGPASSWORD=postgres psql -h localhost -U postgres -c "SELECT 1;" || echo "Connection failed"
+                        echo "בדיקת חיבור לבסיס הנתונים:"
+                        PGPASSWORD=${POSTGRES_PASSWORD} psql -h ${POSTGRES_HOST} -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -c "\\l" || echo "לא ניתן להתחבר לבסיס הנתונים"
                     '''
                 }
             }
@@ -164,10 +153,7 @@ pipeline {
     
     post {
         always {
-            echo 'Pipeline completed'
-            
-            // Optional: clean up database container
-            // sh 'docker rm -f postgres-test || true'
+            echo 'הפייפליין הושלם'
         }
     }
 }
