@@ -2,110 +2,94 @@ pipeline {
     agent any
     
     environment {
-        POSTGRES_USER = 'postgres'
-        POSTGRES_PASSWORD = 'postgres'
-        POSTGRES_DB = 'zelda_cookbook'
-        DB_PORT = '5432'
         NODE_VERSION = 'node_23'
     }
     
-    tools {
-        nodejs NODE_VERSION
-    }
-    
     stages {
-        stage('Cleanup Previous Resources') {
-            steps {
-                script {
-                    sh '''
-                    echo "Cleaning up previous resources..."
-                    docker ps -a | grep -E "postgres|pg" | awk '{print $1}' | xargs -r docker rm -f || true
-                    docker network rm jenkins-network || true
-                    '''
-                }
-            }
-        }
-        
         stage('Clone Repository') {
             steps {
                 sshagent(['github']) {
                     sh 'rm -rf backend'
                     sh 'git clone git@github.com:le7-devops/backend.git'
+                    sh 'cd backend'
                 }
             }
         }
         
-        stage('Check Repository Contents') {
-            steps {
-                sh '''
-                echo "Contents of repository:"
-                ls -la backend
-                
-                echo "Checking for package.json:"
-                find backend -name "package.json"
-                
-                echo "Checking file permissions:"
-                ls -l backend/package.json || echo "package.json not found at expected location"
-                '''
-            }
-        }
-        
-        stage('Setup Test Environment') {
+        stage('Install Dependencies') {
             steps {
                 script {
-                    // יצירת רשת דוקר
-                    sh 'docker network create jenkins-network || true'
-                    
-                    // הפעלת PostgreSQL בתוך הרשת
                     sh '''
-                    docker run -d --name postgres-test \
-                      --network jenkins-network \
-                      -e POSTGRES_USER=${POSTGRES_USER} \
-                      -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
-                      -e POSTGRES_DB=${POSTGRES_DB} \
-                      postgres:14-alpine
+                        cd backend
+                        npm install
+                        npm install mocha-junit-reporter --save-dev
                     '''
-                    
-                    // זמן המתנה לאתחול PostgreSQL
-                    sh 'sleep 15'
                 }
             }
         }
         
-        stage('Unit Tests') {
+        stage('Run Unit Tests') {
             steps {
                 script {
-                    // בדיקה של החיבור למסד הנתונים מתוך קונטיינר דוקר
+                    // יצירת תיקייה לתוצאות הבדיקות
+                    sh 'mkdir -p backend/test-results'
+                    
+                    // הקמת סביבת טסט עם פוסטגרס
                     sh '''
-                    echo "Testing database connection from Docker..."
-                    docker run --rm \
-                      --network jenkins-network \
-                      postgres:14-alpine \
-                      psql postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-test:${DB_PORT}/${POSTGRES_DB} -c "SELECT 1"
+                        docker network create test-network || true
+                        docker stop test-postgres || true
+                        docker rm test-postgres || true
+                        docker run -d --name test-postgres \
+                            --network test-network \
+                            -e POSTGRES_USER=postgres \
+                            -e POSTGRES_PASSWORD=postgres \
+                            -e POSTGRES_DB=zelda_cookbook \
+                            -p 5433:5432 \
+                            postgres:14-alpine
                     '''
                     
-                    // הרצת הבדיקות בדרך שונה - יצירת תיקייה זמנית ברורה
-                    sh '''
-                    # יצירת תיקייה זמנית עם הרשאות מלאות
-                    mkdir -p temp_app
-                    cp -R backend/* temp_app/
-                    chmod -R 777 temp_app
+                    // המתנה לעליית מסד הנתונים
+                    sh 'sleep 10'
                     
-                    # הרצת הבדיקות עם נפח מפורש ובהרשאות מלאות
-                    docker run --rm \
-                      --network jenkins-network \
-                      -v "$(pwd)/temp_app:/app:Z" \
-                      -w /app \
-                      -e NODE_ENV=test \
-                      -e DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-test:${DB_PORT}/${POSTGRES_DB} \
-                      node:18-alpine \
-                      sh -c "ls -la && cat package.json && npm install && npx knex migrate:latest --env test && npx knex seed:run --env test && npm test"
+                    // מעדכן את קובץ knexfile.js זמנית לצורך הטסטים
+                    sh '''
+                        cd backend
+                        sed -i 's|postgres://postgres:postgres@db:5432/zelda_cookbook|postgres://postgres:postgres@localhost:5433/zelda_cookbook|g' knexfile.js
                     '''
+                    
+                    // הרצת המיגרציות והסידים
+                    sh '''
+                        cd backend
+                        npx knex migrate:latest --env test
+                        npx knex seed:run --env test
+                    '''
+                    
+                    // הרצת הטסטים עם הגדרות הסביבה הנכונות
+                    withEnv(['NODE_ENV=test']) {
+                        sh '''
+                            cd backend
+                            npx mocha --exit --reporter mocha-junit-reporter --reporter-options mochaFile=./test-results/results.xml
+                        '''
+                    }
                 }
             }
             post {
                 always {
-                    junit allowEmptyResults: true, testResults: '**/test-results.xml'
+                    // ניקוי המשאבים בסיום הטסטים
+                    sh '''
+                        docker stop test-postgres || true
+                        docker rm test-postgres || true
+                        docker network rm test-network || true
+                    '''
+                    
+                    // החזרת קובץ knexfile.js למצבו המקורי
+                    sh '''
+                        cd backend
+                        git checkout -- knexfile.js
+                    '''
+                    
+                    // שמירת דוחות הטסטים
+                    junit 'backend/test-results/*.xml'
                 }
             }
         }
@@ -113,9 +97,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    dir('backend') {
-                        sh 'docker build -f ./Dockerfile -t zelda_backend .'
-                    }
+                    sh 'cd backend && docker build -f ./Dockerfile -t zelda_backend .'
                 }
             }
         }
@@ -136,12 +118,13 @@ pipeline {
             steps {
                 sshagent(['github']) {
                     script {
-                        dir('backend') {
-                            sh 'git config user.email "sara.beck.dev@example.com"'
-                            sh 'git config user.name "Sara"'
-                            sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
-                            sh 'git push --tags'
-                        }
+                        sh '''
+                            cd backend
+                            git config user.email "sara.beck.dev@example.com"
+                            git config user.name "Sara"
+                            git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"
+                            git push --tags
+                        '''
                     }
                 }
             }
@@ -150,13 +133,21 @@ pipeline {
     
     post {
         always {
-            // ניקוי משאבים
+            // ניקוי משאבים בסיום ה-pipeline במקרה שהם לא נוקו קודם
             sh '''
-            docker rm -f postgres-test || true
-            docker network rm jenkins-network || true
-            rm -rf temp_app
+                docker stop test-postgres || true
+                docker rm test-postgres || true
+                docker network rm test-network || true
             '''
-            cleanWs()
+            
+            // שמירת דוחות הטסטים כארטיפקטים
+            archiveArtifacts artifacts: 'backend/test-results/**', allowEmptyArchive: true
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed!'
         }
     }
 }
