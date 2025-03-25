@@ -20,7 +20,7 @@ pipeline {
                     sh '''
                     echo "Cleaning up previous resources..."
                     docker ps -a | grep -E "postgres|pg" | awk '{print $1}' | xargs -r docker rm -f || true
-                    docker network rm app-network || true
+                    docker network rm jenkins-network || true
                     '''
                 }
             }
@@ -38,27 +38,24 @@ pipeline {
         stage('Setup Test Environment') {
             steps {
                 script {
-                    // בדוק אם הקובץ knexfile.js צריך עדכון
-                    sh '''
-                    cd backend
-                    # עדכן את קובץ ה-knexfile.js זמנית עבור בדיקות
-                    cp knexfile.js knexfile.js.bak
-                    cat knexfile.js.bak | sed "s|postgres://postgres:postgres@db:5432/zelda_cookbook|postgres://postgres:postgres@host.docker.internal:5432/zelda_cookbook|g" > knexfile.js
-                    cat knexfile.js
-                    '''
+                    // יצירת רשת דוקר
+                    sh 'docker network create jenkins-network || true'
                     
-                    // Start PostgreSQL container
+                    // הפעלת PostgreSQL בתוך הרשת
                     sh '''
                     docker run -d --name postgres-test \
+                      --network jenkins-network \
                       -e POSTGRES_USER=${POSTGRES_USER} \
                       -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
                       -e POSTGRES_DB=${POSTGRES_DB} \
-                      -p ${DB_PORT}:${DB_PORT} \
                       postgres:14-alpine
                     '''
                     
-                    // Wait for PostgreSQL to be ready
+                    // זמן המתנה לאתחול PostgreSQL
                     sh 'sleep 15'
+                    
+                    // בדיקת שהקונטיינר עובד
+                    sh 'docker ps | grep postgres-test'
                 }
             }
         }
@@ -66,34 +63,26 @@ pipeline {
         stage('Unit Tests') {
             steps {
                 script {
-                    dir('backend') {
-                        sh '''
-                        echo "Running tests with Node.js version:"
-                        node --version
-                        npm --version
-                        
-                        # התקן את התלויות
-                        npm install
-                        
-                        # בדוק את החיבור למסד הנתונים
-                        echo "Testing database connection..."
-                        
-                        # הגדר משתנה סביבה עבור מסד הנתונים
-                        export NODE_ENV=test
-                        export DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@host.docker.internal:${DB_PORT}/${POSTGRES_DB}
-                        
-                        # הרץ מיגרציות וטען נתונים לבדיקות
-                        echo "Running migrations..."
-                        npx knex migrate:latest --env test
-                        
-                        echo "Running seeds..."
-                        npx knex seed:run --env test
-                        
-                        # הרץ את בדיקות היחידה
-                        echo "Running tests..."
-                        npm test
-                        '''
-                    }
+                    // בדיקה של החיבור למסד הנתונים מתוך קונטיינר דוקר
+                    sh '''
+                    echo "Testing database connection from Docker..."
+                    docker run --rm \
+                      --network jenkins-network \
+                      postgres:14-alpine \
+                      psql postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-test:${DB_PORT}/${POSTGRES_DB} -c "SELECT 1"
+                    '''
+                    
+                    // הרצת הבדיקות בתוך קונטיינר דוקר שמחובר לאותה רשת
+                    sh '''
+                    docker run --rm \
+                      --network jenkins-network \
+                      -v ${WORKSPACE}/backend:/app \
+                      -w /app \
+                      -e NODE_ENV=test \
+                      -e DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-test:${DB_PORT}/${POSTGRES_DB} \
+                      node:18-alpine \
+                      sh -c "npm install && npx knex migrate:latest --env test && npx knex seed:run --env test && npm test"
+                    '''
                 }
             }
             post {
@@ -107,13 +96,6 @@ pipeline {
             steps {
                 script {
                     dir('backend') {
-                        // החזר את קובץ ה-knexfile המקורי אם שונה
-                        sh '''
-                        if [ -f knexfile.js.bak ]; then
-                          mv knexfile.js.bak knexfile.js
-                        fi
-                        '''
-                        
                         sh 'docker build -f ./Dockerfile -t zelda_backend .'
                     }
                 }
@@ -150,13 +132,18 @@ pipeline {
     
     post {
         always {
+            // ניקוי משאבים
             sh '''
             docker rm -f postgres-test || true
-            if [ -f backend/knexfile.js.bak ]; then
-              mv backend/knexfile.js.bak backend/knexfile.js
-            fi
+            docker network rm jenkins-network || true
             '''
             cleanWs()
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed!'
         }
     }
 }
