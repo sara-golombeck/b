@@ -1,23 +1,97 @@
+// pipeline {
+//     agent any
+    
+//     stages {
+//         stage('Clone Repository') {
+//             steps {
+
+//                 sshagent(['github']) {
+//                     sh 'rm -rf backend'
+//                     sh 'git clone git@github.com:le7-devops/backend.git'
+//                 }
+//             }
+//         }
+//         stage('Build Docker Image') {
+//             steps {
+//                 script {
+//                     sh 'docker build -f ./Dockerfile -t zelda_backend .'
+//                 }
+//             }
+//         }  
+//         stage('Login to GHCR and Push Docker Image') {
+//             steps {
+//                 script {
+//                     withCredentials([string(credentialsId: 'ghcr-token', variable: 'GITHUB_TOKEN')]) {
+//                         sh 'echo $GITHUB_TOKEN | docker login ghcr.io -u le7-devops --password-stdin'
+//                         sh 'docker tag zelda_backend ghcr.io/le7-devops/backend:latest'
+//                         sh 'docker push ghcr.io/le7-devops/backend:latest'
+//                     }
+//                 }
+//             }
+//         }
+
+      
+//         stage('Push Version to Git') {
+//             steps {
+//                 sshagent(['github']) {
+//                     script {
+//                         sh 'git config user.email "sara.beck.dev@example.com"'
+//                         sh 'git config user.name "Sara"'
+//                         sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
+//                         sh 'git push --tags'
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }
+
+
+
 pipeline {
     agent any
     
     stages {
         stage('Clone Repository') {
             steps {
-
                 sshagent(['github']) {
                     sh 'rm -rf backend'
                     sh 'git clone git@github.com:le7-devops/backend.git'
                 }
             }
         }
+        
+        stage('Install Dependencies') {
+            steps {
+                dir('backend') {
+                    sh 'npm install'
+                }
+            }
+        }
+        
+        stage('Run Unit Tests') {
+            steps {
+                dir('backend') {
+                    sh 'npm test'
+                }
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'backend/test-results/*.xml'
+                }
+            }
+        }
+        
         stage('Build Docker Image') {
             steps {
                 script {
-                    sh 'docker build -f ./Dockerfile -t zelda_backend .'
+                    dir('backend') {
+                        sh 'docker build -t zelda_backend .'
+                    }
                 }
             }
-        }  
+        }
+        
         stage('Login to GHCR and Push Docker Image') {
             steps {
                 script {
@@ -29,19 +103,32 @@ pipeline {
                 }
             }
         }
-
-      
+        
         stage('Push Version to Git') {
             steps {
-                sshagent(['github']) {
-                    script {
-                        sh 'git config user.email "you@example.com"'
-                        sh 'git config user.name "Your Name"'
-                        sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
-                        sh 'git push --tags'
+                dir('backend') {
+                    sshagent(['github']) {
+                        script {
+                            sh 'git config user.email "sara.beck.dev@example.com"'
+                            sh 'git config user.name "Sara"'
+                            sh 'git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
+                            sh 'git push --tags'
+                        }
                     }
                 }
             }
+        }
+    }
+    
+    post {
+        always {
+            cleanWs()
+        }
+        failure {
+            echo 'הביצוע נכשל. שליחת הודעה לצוות...'
+        }
+        success {
+            echo 'הביצוע הושלם בהצלחה!'
         }
     }
 }
