@@ -1,9 +1,160 @@
+// // // // // // pipeline {
+// // // // // //     agent any
+    
+// // // // // //     environment {
+// // // // // //         NODE_VERSION = 'node_23'
+// // // // // //     }
+    
+// // // // // //     stages {
+// // // // // //         stage('Clone Repository') {
+// // // // // //             steps {
+// // // // // //                 sshagent(['github']) {
+// // // // // //                     sh 'rm -rf backend'
+// // // // // //                     sh 'git clone git@github.com:le7-devops/backend.git'
+// // // // // //                     sh 'cd backend'
+// // // // // //                 }
+// // // // // //             }
+// // // // // //         }
+        
+// // // // // //         stage('Install Dependencies') {
+// // // // // //             steps {
+// // // // // //                 script {
+// // // // // //                     sh '''
+// // // // // //                         cd backend
+// // // // // //                         npm install
+// // // // // //                         npm install mocha-junit-reporter --save-dev
+// // // // // //                     '''
+// // // // // //                 }
+// // // // // //             }
+// // // // // //         }
+        
+// // // // // //         stage('Run Unit Tests') {
+// // // // // //             steps {
+// // // // // //                 script {
+// // // // // //                     // יצירת תיקייה לתוצאות הבדיקות
+// // // // // //                     sh 'mkdir -p backend/test-results'
+                    
+// // // // // //                     // הקמת סביבת טסט עם פוסטגרס
+// // // // // //                     sh '''
+// // // // // //                         docker network create test-network || true
+// // // // // //                         docker stop test-postgres || true
+// // // // // //                         docker rm test-postgres || true
+// // // // // //                         docker run -d --name test-postgres \
+// // // // // //                             --network test-network \
+// // // // // //                             -e POSTGRES_USER=postgres \
+// // // // // //                             -e POSTGRES_PASSWORD=postgres \
+// // // // // //                             -e POSTGRES_DB=zelda_cookbook \
+// // // // // //                             -p 5433:5432 \
+// // // // // //                             postgres:14-alpine
+// // // // // //                     '''
+                    
+// // // // // //                     // המתנה לעליית מסד הנתונים
+// // // // // //                     sh 'sleep 10'
+                    
+// // // // // //                     // מעדכן את קובץ knexfile.js זמנית לצורך הטסטים
+// // // // // //                     sh '''
+// // // // // //                         cd backend
+// // // // // //                         sed -i 's|postgres://postgres:postgres@db:5432/zelda_cookbook|postgres://postgres:postgres@localhost:5433/zelda_cookbook|g' knexfile.js
+// // // // // //                     '''
+                    
+// // // // // //                     // הרצת המיגרציות והסידים
+// // // // // //                     sh '''
+// // // // // //                         cd backend
+// // // // // //                         npx knex migrate:latest --env test
+// // // // // //                         npx knex seed:run --env test
+// // // // // //                     '''
+                    
+// // // // // //                     // הרצת הטסטים עם הגדרות הסביבה הנכונות
+// // // // // //                     withEnv(['NODE_ENV=test']) {
+// // // // // //                         sh '''
+// // // // // //                             cd backend
+// // // // // //                             npx mocha --exit --reporter mocha-junit-reporter --reporter-options mochaFile=./test-results/results.xml
+// // // // // //                         '''
+// // // // // //                     }
+// // // // // //                 }
+// // // // // //             }
+// // // // // //             post {
+// // // // // //                 always {
+// // // // // //                     // ניקוי המשאבים בסיום הטסטים
+// // // // // //                     sh '''
+// // // // // //                         docker stop test-postgres || true
+// // // // // //                         docker rm test-postgres || true
+// // // // // //                         docker network rm test-network || true
+// // // // // //                     '''
+                    
+// // // // // //                     // החזרת קובץ knexfile.js למצבו המקורי
+// // // // // //                     sh '''
+// // // // // //                         cd backend
+// // // // // //                         git checkout -- knexfile.js
+// // // // // //                     '''
+                    
+// // // // // //                     // שמירת דוחות הטסטים
+// // // // // //                     junit 'backend/test-results/*.xml'
+// // // // // //                 }
+// // // // // //             }
+// // // // // //         }
+        
+// // // // // //         stage('Build Docker Image') {
+// // // // // //             steps {
+// // // // // //                 script {
+// // // // // //                     sh 'cd backend && docker build -f ./Dockerfile -t zelda_backend .'
+// // // // // //                 }
+// // // // // //             }
+// // // // // //         }
+        
+// // // // // //         stage('Login to GHCR and Push Docker Image') {
+// // // // // //             steps {
+// // // // // //                 script {
+// // // // // //                     withCredentials([string(credentialsId: 'ghcr-token', variable: 'GITHUB_TOKEN')]) {
+// // // // // //                         sh 'echo $GITHUB_TOKEN | docker login ghcr.io -u le7-devops --password-stdin'
+// // // // // //                         sh 'docker tag zelda_backend ghcr.io/le7-devops/backend:latest'
+// // // // // //                         sh 'docker push ghcr.io/le7-devops/backend:latest'
+// // // // // //                     }
+// // // // // //                 }
+// // // // // //             }
+// // // // // //         }
+        
+// // // // // //         stage('Push Version to Git') {
+// // // // // //             steps {
+// // // // // //                 sshagent(['github']) {
+// // // // // //                     script {
+// // // // // //                         sh '''
+// // // // // //                             cd backend
+// // // // // //                             git config user.email "sara.beck.dev@example.com"
+// // // // // //                             git config user.name "Sara"
+// // // // // //                             git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"
+// // // // // //                             git push --tags
+// // // // // //                         '''
+// // // // // //                     }
+// // // // // //                 }
+// // // // // //             }
+// // // // // //         }
+// // // // // //     }
+    
+// // // // // //     post {
+// // // // // //         always {
+// // // // // //             // ניקוי משאבים בסיום ה-pipeline במקרה שהם לא נוקו קודם
+// // // // // //             sh '''
+// // // // // //                 docker stop test-postgres || true
+// // // // // //                 docker rm test-postgres || true
+// // // // // //                 docker network rm test-network || true
+// // // // // //             '''
+            
+// // // // // //             // שמירת דוחות הטסטים כארטיפקטיםS
+// // // // // //             archiveArtifacts artifacts: 'backend/test-results/**', allowEmptyArchive: true
+// // // // // //         }
+// // // // // //         success {
+// // // // // //             echo 'Pipeline completed successfully!'
+// // // // // //         }
+// // // // // //         failure {
+// // // // // //             echo 'Pipeline failed!'
+// // // // // //         }
+// // // // // //     }
+// // // // // // }
+
+// // // // // בלי קונטיינר של NODE ועדיין טוב אני חושבת
 // // // // // pipeline {
 // // // // //     agent any
-    
-// // // // //     environment {
-// // // // //         NODE_VERSION = 'node_23'
-// // // // //     }
     
 // // // // //     stages {
 // // // // //         stage('Clone Repository') {
@@ -11,85 +162,50 @@
 // // // // //                 sshagent(['github']) {
 // // // // //                     sh 'rm -rf backend'
 // // // // //                     sh 'git clone git@github.com:le7-devops/backend.git'
-// // // // //                     sh 'cd backend'
+// // // // //                     sh 'cd backend && ls -la'
 // // // // //                 }
 // // // // //             }
 // // // // //         }
-        
-// // // // //         stage('Install Dependencies') {
+
+// // // // //         stage('Unit Tests') {
 // // // // //             steps {
 // // // // //                 script {
-// // // // //                     sh '''
-// // // // //                         cd backend
-// // // // //                         npm install
-// // // // //                         npm install mocha-junit-reporter --save-dev
-// // // // //                     '''
-// // // // //                 }
-// // // // //             }
-// // // // //         }
-        
-// // // // //         stage('Run Unit Tests') {
-// // // // //             steps {
-// // // // //                 script {
-// // // // //                     // יצירת תיקייה לתוצאות הבדיקות
-// // // // //                     sh 'mkdir -p backend/test-results'
+// // // // //                     // יצירת רשת דוקר לבדיקות
+// // // // //                     sh 'docker network create test-network || true'
                     
-// // // // //                     // הקמת סביבת טסט עם פוסטגרס
+// // // // //                     // הפעלת מסד נתונים PostgreSQL לבדיקות
 // // // // //                     sh '''
-// // // // //                         docker network create test-network || true
-// // // // //                         docker stop test-postgres || true
-// // // // //                         docker rm test-postgres || true
-// // // // //                         docker run -d --name test-postgres \
+// // // // //                         docker run -d --name postgres-test \
 // // // // //                             --network test-network \
 // // // // //                             -e POSTGRES_USER=postgres \
 // // // // //                             -e POSTGRES_PASSWORD=postgres \
 // // // // //                             -e POSTGRES_DB=zelda_cookbook \
-// // // // //                             -p 5433:5432 \
-// // // // //                             postgres:14-alpine
+// // // // //                             postgres:13-alpine
 // // // // //                     '''
                     
 // // // // //                     // המתנה לעליית מסד הנתונים
-// // // // //                     sh 'sleep 10'
+// // // // //                     sh 'sleep 5'
                     
-// // // // //                     // מעדכן את קובץ knexfile.js זמנית לצורך הטסטים
+// // // // //                     // הרצת בדיקות בקונטיינר נפרד שמתחבר לרשת הבדיקות
 // // // // //                     sh '''
-// // // // //                         cd backend
-// // // // //                         sed -i 's|postgres://postgres:postgres@db:5432/zelda_cookbook|postgres://postgres:postgres@localhost:5433/zelda_cookbook|g' knexfile.js
+// // // // //                         cd backend && docker run --rm \
+// // // // //                             --network test-network \
+// // // // //                             -v $(pwd):/app \
+// // // // //                             -w /app \
+// // // // //                             -e NODE_ENV=test \
+// // // // //                             -e KEY=testkey123 \
+// // // // //                             -e DATABASE_URL=postgres://postgres:postgres@postgres-test:5432/zelda_cookbook \
+// // // // //                             node:16-alpine \
+// // // // //                             sh -c "npm install && npm test"
 // // // // //                     '''
-                    
-// // // // //                     // הרצת המיגרציות והסידים
-// // // // //                     sh '''
-// // // // //                         cd backend
-// // // // //                         npx knex migrate:latest --env test
-// // // // //                         npx knex seed:run --env test
-// // // // //                     '''
-                    
-// // // // //                     // הרצת הטסטים עם הגדרות הסביבה הנכונות
-// // // // //                     withEnv(['NODE_ENV=test']) {
-// // // // //                         sh '''
-// // // // //                             cd backend
-// // // // //                             npx mocha --exit --reporter mocha-junit-reporter --reporter-options mochaFile=./test-results/results.xml
-// // // // //                         '''
-// // // // //                     }
 // // // // //                 }
 // // // // //             }
 // // // // //             post {
 // // // // //                 always {
-// // // // //                     // ניקוי המשאבים בסיום הטסטים
-// // // // //                     sh '''
-// // // // //                         docker stop test-postgres || true
-// // // // //                         docker rm test-postgres || true
-// // // // //                         docker network rm test-network || true
-// // // // //                     '''
-                    
-// // // // //                     // החזרת קובץ knexfile.js למצבו המקורי
-// // // // //                     sh '''
-// // // // //                         cd backend
-// // // // //                         git checkout -- knexfile.js
-// // // // //                     '''
-                    
-// // // // //                     // שמירת דוחות הטסטים
-// // // // //                     junit 'backend/test-results/*.xml'
+// // // // //                     // ניקוי משאבי הבדיקות
+// // // // //                     sh 'docker stop postgres-test || true'
+// // // // //                     sh 'docker rm postgres-test || true'
+// // // // //                     sh 'docker network rm test-network || true'
 // // // // //                 }
 // // // // //             }
 // // // // //         }
@@ -100,7 +216,7 @@
 // // // // //                     sh 'cd backend && docker build -f ./Dockerfile -t zelda_backend .'
 // // // // //                 }
 // // // // //             }
-// // // // //         }
+// // // // //         }  
         
 // // // // //         stage('Login to GHCR and Push Docker Image') {
 // // // // //             steps {
@@ -113,18 +229,15 @@
 // // // // //                 }
 // // // // //             }
 // // // // //         }
-        
+      
 // // // // //         stage('Push Version to Git') {
 // // // // //             steps {
 // // // // //                 sshagent(['github']) {
 // // // // //                     script {
-// // // // //                         sh '''
-// // // // //                             cd backend
-// // // // //                             git config user.email "sara.beck.dev@example.com"
-// // // // //                             git config user.name "Sara"
-// // // // //                             git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"
-// // // // //                             git push --tags
-// // // // //                         '''
+// // // // //                         sh 'cd backend && git config user.email "you@example.com"'
+// // // // //                         sh 'cd backend && git config user.name "Your Name"'
+// // // // //                         sh 'cd backend && git tag -a v$(date +"%Y%m%d%H%M%S") -m "Automated version update"'
+// // // // //                         sh 'cd backend && git push --tags'
 // // // // //                     }
 // // // // //                 }
 // // // // //             }
@@ -133,26 +246,12 @@
     
 // // // // //     post {
 // // // // //         always {
-// // // // //             // ניקוי משאבים בסיום ה-pipeline במקרה שהם לא נוקו קודם
-// // // // //             sh '''
-// // // // //                 docker stop test-postgres || true
-// // // // //                 docker rm test-postgres || true
-// // // // //                 docker network rm test-network || true
-// // // // //             '''
-            
-// // // // //             // שמירת דוחות הטסטים כארטיפקטיםS
-// // // // //             archiveArtifacts artifacts: 'backend/test-results/**', allowEmptyArchive: true
-// // // // //         }
-// // // // //         success {
-// // // // //             echo 'Pipeline completed successfully!'
-// // // // //         }
-// // // // //         failure {
-// // // // //             echo 'Pipeline failed!'
+// // // // //             // ניקוי סביבת העבודה
+// // // // //             cleanWs()
 // // // // //         }
 // // // // //     }
 // // // // // }
 
-// // // // בלי קונטיינר של NODE ועדיין טוב אני חושבת
 // // // // pipeline {
 // // // //     agent any
     
@@ -162,7 +261,7 @@
 // // // //                 sshagent(['github']) {
 // // // //                     sh 'rm -rf backend'
 // // // //                     sh 'git clone git@github.com:le7-devops/backend.git'
-// // // //                     sh 'cd backend && ls -la'
+// // // //                     sh 'ls -la backend'
 // // // //                 }
 // // // //             }
 // // // //         }
@@ -170,34 +269,41 @@
 // // // //         stage('Unit Tests') {
 // // // //             steps {
 // // // //                 script {
-// // // //                     // יצירת רשת דוקר לבדיקות
-// // // //                     sh 'docker network create test-network || true'
+// // // //                     // ניקוי קונטיינרים קודמים, למקרה שנשארו
+// // // //                     sh 'docker rm -f postgres-test || true'
                     
-// // // //                     // הפעלת מסד נתונים PostgreSQL לבדיקות
+// // // //                     // הפעלת מסד נתונים PostgreSQL לבדיקות - ללא רשת מותאמת אישית
 // // // //                     sh '''
 // // // //                         docker run -d --name postgres-test \
-// // // //                             --network test-network \
 // // // //                             -e POSTGRES_USER=postgres \
 // // // //                             -e POSTGRES_PASSWORD=postgres \
 // // // //                             -e POSTGRES_DB=zelda_cookbook \
 // // // //                             postgres:13-alpine
 // // // //                     '''
                     
-// // // //                     // המתנה לעליית מסד הנתונים
-// // // //                     sh 'sleep 5'
+// // // //                     // קבלת כתובת ה-IP של קונטיינר ה-PostgreSQL
+// // // //                     sh 'docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" postgres-test > postgres_ip.txt'
                     
-// // // //                     // הרצת בדיקות בקונטיינר נפרד שמתחבר לרשת הבדיקות
-// // // //                     sh '''
-// // // //                         cd backend && docker run --rm \
-// // // //                             --network test-network \
-// // // //                             -v $(pwd):/app \
-// // // //                             -w /app \
-// // // //                             -e NODE_ENV=test \
-// // // //                             -e KEY=testkey123 \
-// // // //                             -e DATABASE_URL=postgres://postgres:postgres@postgres-test:5432/zelda_cookbook \
-// // // //                             node:16-alpine \
-// // // //                             sh -c "npm install && npm test"
-// // // //                     '''
+// // // //                     // המתנה לעליית מסד הנתונים
+// // // //                     sh 'sleep 10'
+                    
+// // // //                     // קריאת כתובת ה-IP
+// // // //                     script {
+// // // //                         def postgresIp = readFile('postgres_ip.txt').trim()
+// // // //                         echo "PostgreSQL IP: ${postgresIp}"
+                        
+// // // //                         // הרצת בדיקות עם חיבור לכתובת ה-IP של PostgreSQL
+// // // //                         sh """
+// // // //                             docker run --rm \
+// // // //                                 -v ${WORKSPACE}/backend:/app \
+// // // //                                 -w /app \
+// // // //                                 -e NODE_ENV=test \
+// // // //                                 -e KEY=testkey123 \
+// // // //                                 -e DATABASE_URL=postgres://postgres:postgres@${postgresIp}:5432/zelda_cookbook \
+// // // //                                 node:16-alpine \
+// // // //                                 sh -c "npm install && npm test"
+// // // //                         """
+// // // //                     }
 // // // //                 }
 // // // //             }
 // // // //             post {
@@ -205,7 +311,6 @@
 // // // //                     // ניקוי משאבי הבדיקות
 // // // //                     sh 'docker stop postgres-test || true'
 // // // //                     sh 'docker rm postgres-test || true'
-// // // //                     sh 'docker network rm test-network || true'
 // // // //                 }
 // // // //             }
 // // // //         }
@@ -246,11 +351,14 @@
     
 // // // //     post {
 // // // //         always {
-// // // //             // ניקוי סביבת העבודה
+// // // //             // ניקוי משאבים
+// // // //             sh 'docker stop postgres-test || true'
+// // // //             sh 'docker rm postgres-test || true'
 // // // //             cleanWs()
 // // // //         }
 // // // //     }
 // // // // }
+
 
 // // // pipeline {
 // // //     agent any
@@ -261,56 +369,74 @@
 // // //                 sshagent(['github']) {
 // // //                     sh 'rm -rf backend'
 // // //                     sh 'git clone git@github.com:le7-devops/backend.git'
-// // //                     sh 'ls -la backend'
+// // //                     sh 'cd backend && ls -la'
 // // //                 }
 // // //             }
 // // //         }
 
-// // //         stage('Unit Tests') {
+// // //         stage('Run Tests') {
 // // //             steps {
 // // //                 script {
-// // //                     // ניקוי קונטיינרים קודמים, למקרה שנשארו
-// // //                     sh 'docker rm -f postgres-test || true'
+// // //                     // יצירת רשת Docker לצורך בדיקות
+// // //                     sh 'docker network create zelda-test-network || true'
                     
-// // //                     // הפעלת מסד נתונים PostgreSQL לבדיקות - ללא רשת מותאמת אישית
+// // //                     // הפעלת מסד נתונים PostgreSQL לבדיקות עם שם מסד הנתונים מהרידמי
 // // //                     sh '''
 // // //                         docker run -d --name postgres-test \
-// // //                             -e POSTGRES_USER=postgres \
-// // //                             -e POSTGRES_PASSWORD=postgres \
-// // //                             -e POSTGRES_DB=zelda_cookbook \
-// // //                             postgres:13-alpine
+// // //                         --network zelda-test-network \
+// // //                         -e POSTGRES_USER=postgres \
+// // //                         -e POSTGRES_PASSWORD=postgres \
+// // //                         -e POSTGRES_DB=zelda_cookbook_test \
+// // //                         postgres:12-alpine
 // // //                     '''
                     
-// // //                     // קבלת כתובת ה-IP של קונטיינר ה-PostgreSQL
-// // //                     sh 'docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" postgres-test > postgres_ip.txt'
-                    
 // // //                     // המתנה לעליית מסד הנתונים
-// // //                     sh 'sleep 10'
+// // //                     sh 'sleep 5'
                     
-// // //                     // קריאת כתובת ה-IP
-// // //                     script {
-// // //                         def postgresIp = readFile('postgres_ip.txt').trim()
-// // //                         echo "PostgreSQL IP: ${postgresIp}"
-                        
-// // //                         // הרצת בדיקות עם חיבור לכתובת ה-IP של PostgreSQL
-// // //                         sh """
-// // //                             docker run --rm \
-// // //                                 -v ${WORKSPACE}/backend:/app \
-// // //                                 -w /app \
-// // //                                 -e NODE_ENV=test \
-// // //                                 -e KEY=testkey123 \
-// // //                                 -e DATABASE_URL=postgres://postgres:postgres@${postgresIp}:5432/zelda_cookbook \
-// // //                                 node:16-alpine \
-// // //                                 sh -c "npm install && npm test"
-// // //                         """
-// // //                     }
+// // //                     // יצירת Dockerfile זמני לבדיקות
+// // //                     sh '''
+// // //                         cd backend && cat > Dockerfile.test << 'ENDOFFILE'
+// // // FROM node:12.12.0-alpine
+
+// // // # התקנת Git ותלויות נוספות שייתכן שנדרשות
+// // // RUN apk add --no-cache git python3 make g++
+
+// // // WORKDIR /app
+
+// // // COPY package*.json ./
+
+// // // RUN npm install -g knex
+// // // RUN npm install
+
+// // // COPY . .
+
+// // // # עדכון קובץ הקנפיג כך שיתחבר למסד הנתונים הנכון
+// // // RUN sed -i 's/postgres:postgres@db:5432\\/zelda_cookbook/postgres:postgres@postgres-test:5432\\/zelda_cookbook_test/g' knexfile.js
+
+// // // ENV NODE_ENV=test
+// // // ENV KEY=test_secret_key
+
+// // // # הרצת הבדיקות בדיוק כפי שמתואר ברידמי
+// // // CMD ["npm", "test"]
+// // // ENDOFFILE
+// // //                     '''
+                    
+// // //                     // בניית תמונת Docker לבדיקות
+// // //                     sh 'cd backend && docker build -t zelda_backend_test -f Dockerfile.test .'
+                    
+// // //                     // הרצת הבדיקות כפי שמתואר ברידמי
+// // //                     sh '''
+// // //                         cd backend && docker run --rm \
+// // //                         --network zelda-test-network \
+// // //                         zelda_backend_test
+// // //                     '''
 // // //                 }
 // // //             }
 // // //             post {
 // // //                 always {
 // // //                     // ניקוי משאבי הבדיקות
-// // //                     sh 'docker stop postgres-test || true'
-// // //                     sh 'docker rm postgres-test || true'
+// // //                     sh 'docker rm -f postgres-test || true'
+// // //                     sh 'docker network rm zelda-test-network || true'
 // // //                 }
 // // //             }
 // // //         }
@@ -351,14 +477,12 @@
     
 // // //     post {
 // // //         always {
-// // //             // ניקוי משאבים
-// // //             sh 'docker stop postgres-test || true'
-// // //             sh 'docker rm postgres-test || true'
-// // //             cleanWs()
+// // //             // ניקוי תמונות Docker שנוצרו
+// // //             sh 'docker rmi zelda_backend_test || true'
+// // //             sh 'docker rmi zelda_backend || true'
 // // //         }
 // // //     }
 // // // }
-
 
 // // pipeline {
 // //     agent any
@@ -380,7 +504,7 @@
 // //                     // יצירת רשת Docker לצורך בדיקות
 // //                     sh 'docker network create zelda-test-network || true'
                     
-// //                     // הפעלת מסד נתונים PostgreSQL לבדיקות עם שם מסד הנתונים מהרידמי
+// //                     // הפעלת מסד נתונים PostgreSQL לבדיקות
 // //                     sh '''
 // //                         docker run -d --name postgres-test \
 // //                         --network zelda-test-network \
@@ -393,41 +517,14 @@
 // //                     // המתנה לעליית מסד הנתונים
 // //                     sh 'sleep 5'
                     
-// //                     // יצירת Dockerfile זמני לבדיקות
-// //                     sh '''
-// //                         cd backend && cat > Dockerfile.test << 'ENDOFFILE'
-// // FROM node:12.12.0-alpine
-
-// // # התקנת Git ותלויות נוספות שייתכן שנדרשות
-// // RUN apk add --no-cache git python3 make g++
-
-// // WORKDIR /app
-
-// // COPY package*.json ./
-
-// // RUN npm install -g knex
-// // RUN npm install
-
-// // COPY . .
-
-// // # עדכון קובץ הקנפיג כך שיתחבר למסד הנתונים הנכון
-// // RUN sed -i 's/postgres:postgres@db:5432\\/zelda_cookbook/postgres:postgres@postgres-test:5432\\/zelda_cookbook_test/g' knexfile.js
-
-// // ENV NODE_ENV=test
-// // ENV KEY=test_secret_key
-
-// // # הרצת הבדיקות בדיוק כפי שמתואר ברידמי
-// // CMD ["npm", "test"]
-// // ENDOFFILE
-// //                     '''
+// //                     // בניית תמונת הבדיקות מה-Dockerfile.test שנמצא במאגר
+// //                     sh 'cd backend && ls -la && docker build -t zelda_backend_test -f ./Dockerfile.test .'
                     
-// //                     // בניית תמונת Docker לבדיקות
-// //                     sh 'cd backend && docker build -t zelda_backend_test -f Dockerfile.test .'
-                    
-// //                     // הרצת הבדיקות כפי שמתואר ברידמי
+// //                     // הרצת הבדיקות עם חיבור למסד הנתונים
 // //                     sh '''
 // //                         cd backend && docker run --rm \
 // //                         --network zelda-test-network \
+// //                         -e DATABASE_URL="postgres://postgres:postgres@postgres-test:5432/zelda_cookbook_test" \
 // //                         zelda_backend_test
 // //                     '''
 // //                 }
@@ -484,6 +581,8 @@
 // //     }
 // // }
 
+
+
 // pipeline {
 //     agent any
     
@@ -510,21 +609,45 @@
 //                         --network zelda-test-network \
 //                         -e POSTGRES_USER=postgres \
 //                         -e POSTGRES_PASSWORD=postgres \
-//                         -e POSTGRES_DB=zelda_cookbook_test \
+//                         -e POSTGRES_DB=zelda_cookbook \
 //                         postgres:12-alpine
 //                     '''
                     
 //                     // המתנה לעליית מסד הנתונים
 //                     sh 'sleep 5'
                     
-//                     // בניית תמונת הבדיקות מה-Dockerfile.test שנמצא במאגר
-//                     sh 'cd backend && ls -la && docker build -t zelda_backend_test -f ./Dockerfile.test .'
+//                     // יצירת Dockerfile זמני לבדיקות
+//                     sh '''
+//                         cd backend && cat > Dockerfile.test << 'ENDOFFILE'
+// FROM node:12.12.0-alpine
+
+// # התקנת Git ותלויות נוספות שייתכן שנדרשות
+// RUN apk add --no-cache git python3 make g++
+
+// WORKDIR /app
+
+// COPY package*.json ./
+
+// RUN npm install -g knex
+// RUN npm install
+
+// COPY . .
+
+// ENV NODE_ENV=test
+// ENV KEY=test_secret_key
+
+// CMD ["npm", "test"]
+// ENDOFFILE
+//                     '''
+                    
+//                     // בניית תמונת Docker לבדיקות
+//                     sh 'cd backend && docker build -t zelda_backend_test -f Dockerfile.test .'
                     
 //                     // הרצת הבדיקות עם חיבור למסד הנתונים
 //                     sh '''
 //                         cd backend && docker run --rm \
 //                         --network zelda-test-network \
-//                         -e DATABASE_URL="postgres://postgres:postgres@postgres-test:5432/zelda_cookbook_test" \
+//                         -e DATABASE_URL="postgres://postgres:postgres@postgres-test:5432/zelda_cookbook" \
 //                         zelda_backend_test
 //                     '''
 //                 }
@@ -581,8 +704,6 @@
 //     }
 // }
 
-
-
 pipeline {
     agent any
     
@@ -609,45 +730,51 @@ pipeline {
                         --network zelda-test-network \
                         -e POSTGRES_USER=postgres \
                         -e POSTGRES_PASSWORD=postgres \
-                        -e POSTGRES_DB=zelda_cookbook \
+                        -e POSTGRES_DB=zelda_cookbook_test \
                         postgres:12-alpine
                     '''
                     
                     // המתנה לעליית מסד הנתונים
                     sh 'sleep 5'
                     
-                    // יצירת Dockerfile זמני לבדיקות
+                    // יצירת Dockerfile.test בזמן ריצה
                     sh '''
                         cd backend && cat > Dockerfile.test << 'ENDOFFILE'
 FROM node:12.12.0-alpine
 
-# התקנת Git ותלויות נוספות שייתכן שנדרשות
+# התקנת Git ותלויות נוספות נדרשות
 RUN apk add --no-cache git python3 make g++
 
 WORKDIR /app
 
+# העתקת קבצי פרויקט
 COPY package*.json ./
-
 RUN npm install -g knex
 RUN npm install
-
 COPY . .
 
+# עדכון קובץ הקנפיג כך שיתחבר למסד הנתונים הנכון
+RUN sed -i 's/postgres:postgres@db:5432\\/zelda_cookbook/postgres:postgres@postgres-test:5432\\/zelda_cookbook_test/g' knexfile.js
+
+# משתני סביבה לבדיקות
 ENV NODE_ENV=test
 ENV KEY=test_secret_key
 
+# הגדרת נקודת כניסה להרצת בדיקות
 CMD ["npm", "test"]
 ENDOFFILE
                     '''
                     
-                    // בניית תמונת Docker לבדיקות
+                    // הצגת התוכן של Dockerfile.test לדיבאג
+                    sh 'cd backend && cat Dockerfile.test'
+                    
+                    // בניית תמונת הבדיקות
                     sh 'cd backend && docker build -t zelda_backend_test -f Dockerfile.test .'
                     
-                    // הרצת הבדיקות עם חיבור למסד הנתונים
+                    // הרצת הבדיקות
                     sh '''
                         cd backend && docker run --rm \
                         --network zelda-test-network \
-                        -e DATABASE_URL="postgres://postgres:postgres@postgres-test:5432/zelda_cookbook" \
                         zelda_backend_test
                     '''
                 }
