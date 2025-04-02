@@ -380,13 +380,13 @@ pipeline {
                     // יצירת רשת Docker לצורך בדיקות
                     sh 'docker network create zelda-test-network || true'
                     
-                    // הפעלת מסד נתונים PostgreSQL לבדיקות
+                    // הפעלת מסד נתונים PostgreSQL לבדיקות עם שם מסד הנתונים מהרידמי
                     sh '''
                         docker run -d --name postgres-test \
                         --network zelda-test-network \
                         -e POSTGRES_USER=postgres \
                         -e POSTGRES_PASSWORD=postgres \
-                        -e POSTGRES_DB=zelda_cookbook \
+                        -e POSTGRES_DB=zelda_cookbook_test \
                         postgres:12-alpine
                     '''
                     
@@ -397,13 +397,26 @@ pipeline {
                     sh '''
                         cd backend && cat > Dockerfile.test << 'ENDOFFILE'
 FROM node:12.12.0-alpine
+
+# התקנת Git ותלויות נוספות שייתכן שנדרשות
+RUN apk add --no-cache git python3 make g++
+
 WORKDIR /app
+
 COPY package*.json ./
+
 RUN npm install -g knex
 RUN npm install
+
 COPY . .
+
+# עדכון קובץ הקנפיג כך שיתחבר למסד הנתונים הנכון
+RUN sed -i 's/postgres:postgres@db:5432\\/zelda_cookbook/postgres:postgres@postgres-test:5432\\/zelda_cookbook_test/g' knexfile.js
+
 ENV NODE_ENV=test
 ENV KEY=test_secret_key
+
+# הרצת הבדיקות בדיוק כפי שמתואר ברידמי
 CMD ["npm", "test"]
 ENDOFFILE
                     '''
@@ -411,11 +424,10 @@ ENDOFFILE
                     // בניית תמונת Docker לבדיקות
                     sh 'cd backend && docker build -t zelda_backend_test -f Dockerfile.test .'
                     
-                    // הרצת הבדיקות עם חיבור למסד הנתונים
+                    // הרצת הבדיקות כפי שמתואר ברידמי
                     sh '''
                         cd backend && docker run --rm \
                         --network zelda-test-network \
-                        -e DATABASE_URL="postgres://postgres:postgres@postgres-test:5432/zelda_cookbook" \
                         zelda_backend_test
                     '''
                 }
