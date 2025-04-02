@@ -518,7 +518,7 @@ pipeline {
                     sh 'sleep 5'
                     
                     // בניית תמונת הבדיקות מה-Dockerfile.test שנמצא במאגר
-                    sh 'cd backend && docker build -f Dockerfile.test -t zelda_backend_test .'
+                    sh 'cd backend && docker build -f ./Dockerfile.test -t zelda_backend_test .'
                     
                     // הרצת הבדיקות עם חיבור למסד הנתונים
                     sh '''
