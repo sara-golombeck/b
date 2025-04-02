@@ -393,20 +393,23 @@ pipeline {
                     // המתנה לעליית מסד הנתונים
                     sh 'sleep 5'
                     
-                    // בניית תמונת Docker עם תלויות הבדיקה והרצת הבדיקות
+                    // יצירת Dockerfile זמני לבדיקות
                     sh '''
-                        cd backend && docker build -t zelda_backend_test -f- . <<EOF
-                        FROM node:12.12.0-alpine
-                        WORKDIR /app
-                        COPY package*.json ./
-                        RUN npm install -g knex
-                        RUN npm install
-                        COPY . .
-                        ENV NODE_ENV=test
-                        ENV KEY=test_secret_key
-                        CMD ["npm", "test"]
-                        EOF
+                        cd backend && cat > Dockerfile.test << 'ENDOFFILE'
+FROM node:12.12.0-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install -g knex
+RUN npm install
+COPY . .
+ENV NODE_ENV=test
+ENV KEY=test_secret_key
+CMD ["npm", "test"]
+ENDOFFILE
                     '''
+                    
+                    // בניית תמונת Docker לבדיקות
+                    sh 'cd backend && docker build -t zelda_backend_test -f Dockerfile.test .'
                     
                     // הרצת הבדיקות עם חיבור למסד הנתונים
                     sh '''
